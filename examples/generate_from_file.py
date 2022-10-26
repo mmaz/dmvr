@@ -90,7 +90,7 @@ def set_context_int(key: str, value: int, sequence: tf.train.SequenceExample):
 def extract_frames(video_path: str,
                    start: float,
                    end: float,
-                   fps: int = 10,
+                   fps: int = 25,
                    min_resize: int = 256):
   """Extract list of jpeg bytes from video_path using ffmpeg."""
   new_width = "(iw/min(iw,ih))*{}".format(min_resize)
@@ -111,16 +111,27 @@ def extract_frames(video_path: str,
 def extract_audio(video_path: str,
                   start: float,
                   end: float,
-                  sampling_rate: int = 48000):
+                  sampling_rate: int = 16000):
   """Extract raw mono audio float list from video_path with ffmpeg."""
+  # https://trac.ffmpeg.org/wiki/audio%20types
+  if sampling_rate == 16000:
+    format = "s16le"
+  elif sampling_rate == 48000:
+    raise ValueError("untested")
+    format = "s32le" # not sure
+  else:
+    raise ValueError("untested")
   cmd = (
       ffmpeg
       .input(video_path, ss=start, t=end-start)
-      .output("pipe:", ac=1, ar=sampling_rate, format="s32le")
+      .output("pipe:", ac=1, ar=sampling_rate, format=format)
   )
   audio, _ = cmd.run(capture_stdout=True, quiet=True)
-  audio = np.frombuffer(audio, np.float32)
-  return list(audio)
+  assert sampling_rate == 16_000
+  audio = np.frombuffer(audio, np.int16)
+  # https://stackoverflow.com/a/42544738
+  audio_f32 = audio.astype(np.float32) / 32768.0
+  return list(audio_f32)
 
 
 def generate_sequence_example(video_path: str,
