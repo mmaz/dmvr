@@ -95,26 +95,21 @@ vids = list(vid_dir.glob("*.mp4"))
 
 # https://stackoverflow.com/a/31025482
 def get_length(input_video):
+    # fmt: off
     result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            input_video,
-        ],
+        [ "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", input_video, ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    # fmt: on
     return float(result.stdout)
 
 
 # %%
-vid = str(vids[0])
+vid = str(vids[5])
+print(vid)
 end = get_length(vid)
+print("length", end)
 seq_ex = generate_sequence_example(vid, start=0, end=end)
 
 # %%
@@ -160,7 +155,7 @@ vid
 # %%
 # end to end encoding example
 sampling_rate = 16_000
-vid = "/media/mark/sol/kinetics-dataset/k700-2020/train/dribbling basketball/D7URTg7KuMw_000008_000018.mp4"
+# vid = "/media/mark/sol/kinetics-dataset/k700-2020/train/dribbling basketball/D7URTg7KuMw_000008_000018.mp4"
 cmd = ffmpeg.input(vid).output("pipe:", ac=1, ar=sampling_rate, format="s16le")
 audio, _ = cmd.run(capture_stdout=True, quiet=True)
 # ffmpeg returns int16 encoded bytes
@@ -220,7 +215,10 @@ def to_spec(
     upper_edge_hertz: float = 7600.0,
     normalize: bool = False,
 ):
-    """frame_length and frame_step are in passed in as number of samples
+    """
+    this is modified from dmvr/processors.py: compute_audio_spectrogram()
+    
+    frame_length and frame_step are in passed in as number of samples
     so for 16kHz, 25ms is 400 samples (for frame length)
     16_000 samples per sec * 0.025 sec = 400 samples
     frame_step is 10ms, so 160 samples
@@ -237,6 +235,7 @@ def to_spec(
     #     raw_audio = _preemphasis(raw_audio, preemphasis)
 
     def _extract_spectrogram(waveform: tf.Tensor, spectrogram_type: str) -> tf.Tensor:
+        # NOTE(mmaz): modified to use a hamming_window instead of tf.signal.hann
         stfts = tf.signal.stft(
             waveform,
             frame_length=frame_length,
