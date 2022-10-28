@@ -1,4 +1,8 @@
 # %%
+import os
+# hide gpu from TF so we can parallelize spectrogram generation
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 import datetime
 import logging
 import matplotlib.pyplot as plt
@@ -18,6 +22,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import tensorflow.experimental.numpy as tnp
+import tqdm
 
 _JPEG_HEADER = b"\xff\xd8"
 
@@ -69,6 +74,7 @@ def get_audio_info(filepath: str):
 def has_audio(filepath: str):
     audio_info = get_audio_info(filepath)
     return len(audio_info["streams"]) > 0
+
 
 def to_spec(
     raw_audio,
@@ -136,7 +142,19 @@ def to_spec(
     spectrogram = _extract_spectrogram(raw_audio, spectrogram_type)
     return spectrogram
 
-# %%
+
+# https://stackoverflow.com/a/31025482
+def get_length(input_video):
+    # fmt: off
+    result = subprocess.run(
+        [ "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", input_video, ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    # fmt: on
+    return float(result.stdout)
+
+
 def generate_sequence_example(
     video_path: str,
     start: float,
@@ -147,7 +165,7 @@ def generate_sequence_example(
     label_name: Optional[str] = None,
     caption: Optional[str] = None,
     label_map: Optional[Dict[str, int]] = None,
-    spec_width_timeaxis: int = 100, # 100x128
+    spec_width_timeaxis: int = 100,  # 100x128
 ) -> Optional[tf.train.SequenceExample]:
     """Generate a sequence example."""
     # TODO(mmaz) this is probably slow
@@ -181,19 +199,88 @@ def generate_sequence_example(
     # mbt/datasets/dataset_utils::add_spectrogram() calls reshape:
     # sampler_builder.add_fn(
     #  fn=lambda x: tf.reshape(x, (-1, input_shape[1])),
-    for spec_second in tnp.vsplit(spec_divisible, nearest_divisible // spec_width_timeaxis):
-        gff.add_float_list("melspec/feature/floats", spec_second.flatten(), seq_example)
+    for spec_second in tnp.vsplit(
+        spec_divisible, nearest_divisible // spec_width_timeaxis
+    ):
+        gff.add_float_list(
+            "melspec/feature/floats", tf.reshape(spec_second, -1), seq_example
+        )
 
     # to include raw waveforms:
-    #gff.add_float_list("WAVEFORM/feature/floats", audio, seq_example)
+    # gff.add_float_list("WAVEFORM/feature/floats", audio, seq_example)
 
     # Add other metadata.
     gff.set_context_bytes("video/filename", video_path.encode(), seq_example)
     # Add start and time in micro seconds.
     gff.set_context_int("clip/start/timestamp", int(1000000 * start), seq_example)
     gff.set_context_int("clip/end/timestamp", int(1000000 * end), seq_example)
+
+    # add dummy labels (TODO(mmaz) fix)
+    # see dmvr/modalities.py::add_label()
+    # > This function expects the input to be either a `tf.train.SequenceExample`
+    # > (with the features in the context) or a `tf.train.Example`. The expected
+    # > structure is (or equivalent for `tf.train.Example`):
+    gff.set_context_int_list("clip/label/index", [0], seq_example)
+    gff.set_context_bytes("clip/label/text", "dummy".encode(), seq_example)
+
     return seq_example
 
+
+# %%
+k700 = Path("/media/mark/sol/kinetics-dataset/k700-2020")
+ktrain = k700 / "train"
+vid_dir = ktrain / "dribbling basketball"
+vids = list(vid_dir.glob("*.mp4"))
+
+vid = str(vids[5])
+print(vid)
+end = get_length(vid)
+print("length", end)
+seq_ex = generate_sequence_example(
+    vid, start=0, end=end, fps=25, min_resize=256, sampling_rate=16_000
+)
+
+# %%
+categories = [d.name for d in sorted(ktrain.iterdir())]
+print(len(categories))
+rng = np.random.default_rng(0)
+sel_cats = rng.choice(categories, 36)
+print(sel_cats)
+videos = [v for c in sel_cats for v in (ktrain / c).glob("*.mp4")]
+print("num vids", len(videos), "avg", len(videos) // len(sel_cats))
+
+videos = rng.choice(videos, 140)
+
+num_shards = int(math.sqrt(len(videos)))
+print(f"{num_shards=}")
+
+# %%
+basedir = "/media/mark/sol/ktfr/"
+basename = "kinetics_dummy"
+shard_names = [
+    os.path.join(basedir, f"{basename}-{i:05d}-of-{num_shards:05d}")
+    for i in range(num_shards)
+]
+writers = [tf.io.TFRecordWriter(shard_name) for shard_name in shard_names]
+
+written = 0
+with gff._close_on_exit(writers) as writers:
+    for i in tqdm.tqdm(range(len(videos))):
+        vid = str(videos[i])
+        end = get_length(vid)
+        if end < 8:
+            print("too short", vid)
+            continue
+        # print("length", end)
+        seq_ex = generate_sequence_example(
+            vid, start=0, end=end, fps=25, min_resize=256, sampling_rate=16_000
+        )
+        if seq_ex is None:
+            print("no audio", vid)
+            continue
+        writers[i % len(writers)].write(seq_ex.SerializeToString())
+        written += 1
+print(f"{written=} examples")
 
 # %%
 # split spectrogram into 1 second frames
@@ -211,7 +298,7 @@ for arr in tnp.vsplit(c_divisible, nearest_divisible // tile_size):
 
 print(tf.reshape(arr, -1).shape)
 seq_example = tf.train.SequenceExample()
-gff.add_float_list("melspec/feature/floats", tf.reshape(arr,-1), seq_example)
+gff.add_float_list("melspec/feature/floats", tf.reshape(arr, -1), seq_example)
 
 # %%
 
@@ -220,21 +307,6 @@ record_fp = Path.home() / "apple/tmp/test.tfrecord"
 record_fp = str(record_fp)
 
 # %%
-k700 = Path("/media/mark/sol/kinetics-dataset/k700-2020")
-ktrain = k700 / "train"
-vid_dir = ktrain / "dribbling basketball"
-vids = list(vid_dir.glob("*.mp4"))
-
-# https://stackoverflow.com/a/31025482
-def get_length(input_video):
-    # fmt: off
-    result = subprocess.run(
-        [ "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", input_video, ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    # fmt: on
-    return float(result.stdout)
 
 
 # %%
@@ -297,8 +369,8 @@ plt.plot(audio)
 # normalize to [-1, 1]
 audio_f32 = audio.astype(np.float32) / 32768.0  # https://stackoverflow.com/a/42544738
 # expand to length, num_channels
-#reencoded = tf.audio.encode_wav(np.expand_dims(audio_f32, -1), sampling_rate)
-#tf.io.write_file("/home/mark/apple/tmp/test.wav", reencoded)
+# reencoded = tf.audio.encode_wav(np.expand_dims(audio_f32, -1), sampling_rate)
+# tf.io.write_file("/home/mark/apple/tmp/test.wav", reencoded)
 
 # %%
 spec = to_spec(audio_f32, spectrogram_type="logmf", sample_rate=sampling_rate)
