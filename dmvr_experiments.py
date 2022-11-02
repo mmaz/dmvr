@@ -21,7 +21,7 @@ import ffmpeg
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import tensorflow.experimental.numpy as tnp
+# import tensorflow.experimental.numpy as tnp
 import tqdm
 
 _JPEG_HEADER = b"\xff\xd8"
@@ -32,6 +32,7 @@ sys.path.append(src)
 import examples.generate_from_file as gff
 
 # %%
+"""
 # RUN ONCE
 # https://stackoverflow.com/a/64970162
 logger = logging.getLogger()
@@ -51,7 +52,7 @@ file_handler.setFormatter(formatter)
 
 logger.addHandler(file_handler)
 logger.addHandler(stdout_handler)
-
+"""
 # %%
 logging.debug("starting")
 logging.warning("warn")
@@ -173,9 +174,12 @@ def generate_sequence_example(
         logging.warning(f"skipping {video_path} - no audio")
         return None
 
+    # tstart = datetime.datetime.now()
     imgs_encoded = gff.extract_frames(
         video_path, start, end, fps=fps, min_resize=min_resize
     )
+    # tend = datetime.datetime.now()
+    # print(f"imgs {tend - tstart=}")
 
     # Initiate the sequence example.
     seq_example = tf.train.SequenceExample()
@@ -192,6 +196,7 @@ def generate_sequence_example(
 
     # Add audio.
     audio = gff.extract_audio(video_path, start, end, sampling_rate=sampling_rate)
+
     spec = to_spec(audio, spectrogram_type="logmf", sample_rate=sampling_rate)
     nearest_divisible = spec.shape[0] - (spec.shape[0] % spec_width_timeaxis)
     spec_divisible = spec[:nearest_divisible, :]
@@ -199,12 +204,21 @@ def generate_sequence_example(
     # mbt/datasets/dataset_utils::add_spectrogram() calls reshape:
     # sampler_builder.add_fn(
     #  fn=lambda x: tf.reshape(x, (-1, input_shape[1])),
-    for spec_second in tnp.vsplit(
-        spec_divisible, nearest_divisible // spec_width_timeaxis
+    # tstart = datetime.datetime.now()
+    # for spec_second in tnp.vsplit(
+    #     spec_divisible, nearest_divisible // spec_width_timeaxis
+    # ):
+    #     gff.add_float_list(
+    #         "melspec/feature/floats", tf.reshape(spec_second, -1), seq_example
+    #     )
+    for spec_second in np.vsplit(
+        spec_divisible.numpy(), nearest_divisible // spec_width_timeaxis
     ):
         gff.add_float_list(
-            "melspec/feature/floats", tf.reshape(spec_second, -1), seq_example
+            "melspec/feature/floats", np.reshape(spec_second, -1), seq_example
         )
+    # tend = datetime.datetime.now()
+    # print(f"spec {tend - tstart=}")
 
     # to include raw waveforms:
     # gff.add_float_list("WAVEFORM/feature/floats", audio, seq_example)
@@ -220,8 +234,18 @@ def generate_sequence_example(
     # > This function expects the input to be either a `tf.train.SequenceExample`
     # > (with the features in the context) or a `tf.train.Example`. The expected
     # > structure is (or equivalent for `tf.train.Example`):
-    gff.set_context_int_list("clip/label/index", [0], seq_example)
-    gff.set_context_bytes("clip/label/text", "dummy".encode(), seq_example)
+
+
+    # gff.set_context_int_list("clip/label/index", [0], seq_example)
+    # gff.set_context_bytes("clip/label/text", "dummy".encode(), seq_example)
+    if np.random.random() < 0.3:
+        num_labels = 2
+    else:
+        num_labels = 1
+    random_labels = np.random.choice(100, num_labels, replace=False)
+    gff.set_context_int_list("clip/label/index", random_labels, seq_example)
+    label = ",".join([f"label{x}" for x in random_labels])
+    gff.set_context_bytes("clip/label/text", label.encode(), seq_example)
 
     return seq_example
 
@@ -249,7 +273,7 @@ print(sel_cats)
 videos = [v for c in sel_cats for v in (ktrain / c).glob("*.mp4")]
 print("num vids", len(videos), "avg", len(videos) // len(sel_cats))
 
-videos = rng.choice(videos, 140)
+videos = rng.choice(videos, 1000)
 
 num_shards = int(math.sqrt(len(videos)))
 print(f"{num_shards=}")
@@ -257,6 +281,7 @@ print(f"{num_shards=}")
 # %%
 basedir = "/media/mark/sol/ktfr/"
 basename = "kinetics_dummy"
+assert len(list(Path(basedir).iterdir())) == 0, f"{basedir} not empty"
 shard_names = [
     os.path.join(basedir, f"{basename}-{i:05d}-of-{num_shards:05d}")
     for i in range(num_shards)
@@ -267,16 +292,19 @@ written = 0
 with gff._close_on_exit(writers) as writers:
     for i in tqdm.tqdm(range(len(videos))):
         vid = str(videos[i])
+        # tstart = datetime.datetime.now()
         end = get_length(vid)
+        # tend = datetime.datetime.now()
+        # print(f"{tend - tstart=}")
         if end < 8:
-            print("too short", vid)
+            #print("too short", vid)
             continue
         # print("length", end)
         seq_ex = generate_sequence_example(
             vid, start=0, end=end, fps=25, min_resize=256, sampling_rate=16_000
         )
         if seq_ex is None:
-            print("no audio", vid)
+            #print("no audio", vid)
             continue
         writers[i % len(writers)].write(seq_ex.SerializeToString())
         written += 1
@@ -293,8 +321,8 @@ nearest_divisible = c.shape[0] - (c.shape[0] % tile_size)
 c_divisible = c[:nearest_divisible, :]
 for arr in np.vsplit(c_divisible, nearest_divisible // tile_size):
     print(arr)
-for arr in tnp.vsplit(c_divisible, nearest_divisible // tile_size):
-    print(arr)
+# for arr in tnp.vsplit(c_divisible, nearest_divisible // tile_size):
+#     print(arr)
 
 print(tf.reshape(arr, -1).shape)
 seq_example = tf.train.SequenceExample()
