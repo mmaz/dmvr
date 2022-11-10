@@ -15,12 +15,12 @@
 """Utils for adding modalities."""
 
 import functools
-from typing import Optional
+from typing import Optional, Any
 
 from absl import logging
 from dmvr import builders
 from dmvr import processors
-from dmvr import tokenizers
+#from dmvr import tokenizers
 import tensorflow as tf
 
 
@@ -414,7 +414,7 @@ def add_text(
     parser_builder: builders.BaseParserBuilder,
     decoder_builder: builders.DecoderBuilder,
     preprocessor_builder: builders.PreprocessorBuilder,
-    tokenizer: tokenizers.TextTokenizer,
+    tokenizer: Any, #TODO(mmaz) removed tokenizers.TextTokenizer
     is_training: bool = True,
     input_feature_name: str = 'caption/string',
     output_raw_string_name: str = builders.TEXT_FEATURE_NAME,
