@@ -17,7 +17,7 @@
 from typing import Any, Optional, Sequence, Union
 
 from dmvr import builders
-from dmvr import tokenizers
+#from dmvr import tokenizers
 import tensorflow as tf
 
 
@@ -684,7 +684,7 @@ def crop_or_pad_words(words: tf.Tensor,
 
 
 def tokenize(features: builders.FeaturesDict,
-             tokenizer: tokenizers.TextTokenizer,
+             tokenizer: Any, #TODO(mmaz) removed tokenizers.TextTokenizer
              raw_string_name: str,
              tokenized_name: str,
              prepend_bos: bool,
