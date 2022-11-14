@@ -69,7 +69,9 @@ data_subset = dict(train=dict(), val=dict())
 
 def video_paths(split: Path, category: str):
     return list(
-        sorted(str(v) for v in (split / category).iterdir() if v.suffix == ".mp4"))
+        sorted(
+            str(v) for v in (split / category).iterdir()
+            if v.suffix == ".mp4"))
 
 
 for c in selected_categories:
