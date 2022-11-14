@@ -3,6 +3,7 @@ import os
 # hide gpu from TF so we can parallelize spectrogram generation
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
+from dataclasses import dataclass
 import datetime
 import logging
 import matplotlib.pyplot as plt
@@ -13,6 +14,9 @@ import sys
 from typing import Dict, Optional, Sequence
 from pathlib import Path
 import subprocess
+import multiprocessing
+import concurrent.futures
+import time
 import json
 
 from absl import app
@@ -57,6 +61,7 @@ logger.addHandler(stdout_handler)
 logging.debug("starting")
 logging.warning("warn")
 
+
 # %%
 def get_audio_info(filepath: str):
     # ffprobe: does the video have audio, get duration, json oputput
@@ -97,17 +102,17 @@ def to_spec(
     frame_step is 10ms, so 160 samples
     """
     if spectrogram_type not in ["spectrogram", "logmf", "mfcc"]:
-        raise ValueError(
-            "Spectrogram type should be one of `spectrogram`, "
-            "`logmf`, or `mfcc`, got {}".format(spectrogram_type)
-        )
+        raise ValueError("Spectrogram type should be one of `spectrogram`, "
+                         "`logmf`, or `mfcc`, got {}".format(spectrogram_type))
     if normalize:
-        raw_audio /= tf.reduce_max(tf.abs(raw_audio), axis=-1, keepdims=True) + 1e-8
+        raw_audio /= tf.reduce_max(tf.abs(raw_audio), axis=-1,
+                                   keepdims=True) + 1e-8
         # features[audio_feature_name] = raw_audio
     #   if preemphasis is not None:
     #     raw_audio = _preemphasis(raw_audio, preemphasis)
 
-    def _extract_spectrogram(waveform: tf.Tensor, spectrogram_type: str) -> tf.Tensor:
+    def _extract_spectrogram(waveform: tf.Tensor,
+                             spectrogram_type: str) -> tf.Tensor:
         # NOTE(mmaz): modified to use a hamming_window instead of tf.signal.hann
         stfts = tf.signal.stft(
             waveform,
@@ -131,10 +136,10 @@ def to_spec(
             lower_edge_hertz,
             upper_edge_hertz,
         )
-        mel_spectrograms = tf.tensordot(spectrograms, linear_to_mel_weight_matrix, 1)
-        mel_spectrograms.set_shape(
-            spectrograms.shape[:-1].concatenate(linear_to_mel_weight_matrix.shape[-1:])
-        )
+        mel_spectrograms = tf.tensordot(spectrograms,
+                                        linear_to_mel_weight_matrix, 1)
+        mel_spectrograms.set_shape(spectrograms.shape[:-1].concatenate(
+            linear_to_mel_weight_matrix.shape[-1:]))
 
         # Compute a stabilized log to get log-magnitude mel-scale spectrograms.
         log_mel_spectrograms = tf.math.log(mel_spectrograms + 1e-6)
@@ -148,7 +153,16 @@ def to_spec(
 def get_length(input_video):
     # fmt: off
     result = subprocess.run(
-        [ "ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", input_video, ],
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            input_video,
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
@@ -167,17 +181,20 @@ def generate_sequence_example(
     caption: Optional[str] = None,
     label_map: Optional[Dict[str, int]] = None,
     spec_width_timeaxis: int = 100,  # 100x128
+    check_audio_present: bool = False,
 ) -> Optional[tf.train.SequenceExample]:
     """Generate a sequence example."""
     # TODO(mmaz) this is probably slow
-    if not has_audio(video_path):
+    if check_audio_present and not has_audio(video_path):
         logging.warning(f"skipping {video_path} - no audio")
         return None
 
     # tstart = datetime.datetime.now()
-    imgs_encoded = gff.extract_frames(
-        video_path, start, end, fps=fps, min_resize=min_resize
-    )
+    imgs_encoded = gff.extract_frames(video_path,
+                                      start,
+                                      end,
+                                      fps=fps,
+                                      min_resize=min_resize)
     # tend = datetime.datetime.now()
     # print(f"imgs {tend - tstart=}")
 
@@ -186,8 +203,10 @@ def generate_sequence_example(
 
     # Add the label list as text and indices.
     if label_name:
-        gff.set_context_int("clip/label/index", label_map[label_name], seq_example)
-        gff.set_context_bytes("clip/label/text", label_name.encode(), seq_example)
+        gff.set_context_int("clip/label/index", label_map[label_name],
+                            seq_example)
+        gff.set_context_bytes("clip/label/text", label_name.encode(),
+                              seq_example)
     if caption:
         gff.set_context_bytes("caption/string", caption.encode(), seq_example)
     # Add the frames as one feature per frame.
@@ -195,7 +214,10 @@ def generate_sequence_example(
         gff.add_bytes_list("image/encoded", [img_encoded], seq_example)
 
     # Add audio.
-    audio = gff.extract_audio(video_path, start, end, sampling_rate=sampling_rate)
+    audio = gff.extract_audio(video_path,
+                              start,
+                              end,
+                              sampling_rate=sampling_rate)
 
     spec = to_spec(audio, spectrogram_type="logmf", sample_rate=sampling_rate)
     nearest_divisible = spec.shape[0] - (spec.shape[0] % spec_width_timeaxis)
@@ -211,12 +233,10 @@ def generate_sequence_example(
     #     gff.add_float_list(
     #         "melspec/feature/floats", tf.reshape(spec_second, -1), seq_example
     #     )
-    for spec_second in np.vsplit(
-        spec_divisible.numpy(), nearest_divisible // spec_width_timeaxis
-    ):
-        gff.add_float_list(
-            "melspec/feature/floats", np.reshape(spec_second, -1), seq_example
-        )
+    for spec_second in np.vsplit(spec_divisible.numpy(),
+                                 nearest_divisible // spec_width_timeaxis):
+        gff.add_float_list("melspec/feature/floats",
+                           np.reshape(spec_second, -1), seq_example)
     # tend = datetime.datetime.now()
     # print(f"spec {tend - tstart=}")
 
@@ -226,7 +246,8 @@ def generate_sequence_example(
     # Add other metadata.
     gff.set_context_bytes("video/filename", video_path.encode(), seq_example)
     # Add start and time in micro seconds.
-    gff.set_context_int("clip/start/timestamp", int(1000000 * start), seq_example)
+    gff.set_context_int("clip/start/timestamp", int(1000000 * start),
+                        seq_example)
     gff.set_context_int("clip/end/timestamp", int(1000000 * end), seq_example)
 
     # add dummy labels (TODO(mmaz) fix)
@@ -234,7 +255,6 @@ def generate_sequence_example(
     # > This function expects the input to be either a `tf.train.SequenceExample`
     # > (with the features in the context) or a `tf.train.Example`. The expected
     # > structure is (or equivalent for `tf.train.Example`):
-
 
     # gff.set_context_int_list("clip/label/index", [0], seq_example)
     # gff.set_context_bytes("clip/label/text", "dummy".encode(), seq_example)
@@ -251,6 +271,57 @@ def generate_sequence_example(
 
 
 # %%
+kinetics_subset = json.loads(Path("kinetics_subset.json").read_text())
+
+# %%
+vid = "/media/mark/sol/kinetics-dataset/k700-2020/train/dribbling basketball/D7URTg7KuMw_000008_000018.mp4"
+print(get_audio_info(vid)["streams"][0]["duration"])
+print(get_length(vid))
+
+# %%
+# with multiprocessing.Pool() as pool:
+#     with multiprocessing.Manager() as manager:
+#         metadata = manager.dict()
+#         to_process = [(code, metadata) for code in isocodes]
+#         for _ in pool.imap_unordered(metadata_lang, to_process):
+#             pass
+
+
+def satisfies_constraints(video_path: str,
+                          min_duration: float = 8.0) -> Optional[dict]:
+    audio_info = get_audio_info(video_path)
+    audio_present = len(audio_info["streams"]) > 0
+    if not audio_present:
+        return None
+    duration = float(audio_info["streams"][0]["duration"])
+    if duration < min_duration:
+        return None
+    return dict(path=video_path, duration=duration)
+
+
+kinetics_subset_waudio = dict(train={}, val={})
+for split in ["train", "val"]:
+    for category, videos in kinetics_subset[split].items():
+        num_v = len(videos)
+        with multiprocessing.Pool() as pool:
+            for ix, constraint_results in enumerate(
+                    pool.imap_unordered(satisfies_constraints,
+                                        videos,
+                                        chunksize=50)):
+                if constraint_results is None:
+                    continue
+                kinetics_subset_waudio[split].setdefault(
+                    category, []).append(constraint_results)
+        num_vwa = len(kinetics_subset_waudio[split][category])
+        print(category, num_v, f"{num_vwa/num_v:.2%}")
+
+# %%
+ks_waudio = Path("kinetics_subset_waudio_duration_over8sec.json")
+assert not ks_waudio.exists(), f"{ks_waudio} already exists"
+ks_waudio.write_text(
+    json.dumps(kinetics_subset_waudio, sort_keys=True, indent=2))
+
+# %%
 k700 = Path("/media/mark/sol/kinetics-dataset/k700-2020")
 ktrain = k700 / "train"
 vid_dir = ktrain / "dribbling basketball"
@@ -260,11 +331,36 @@ vid = str(vids[5])
 print(vid)
 end = get_length(vid)
 print("length", end)
-seq_ex = generate_sequence_example(
-    vid, start=0, end=end, fps=25, min_resize=256, sampling_rate=16_000
-)
+seq_ex = generate_sequence_example(vid,
+                                   start=0,
+                                   end=end,
+                                   fps=25,
+                                   min_resize=256,
+                                   sampling_rate=16_000,
+                                   check_audio_present=True)
+
 
 # %%
+# test concurrent.futures for returning eagerly
+
+def foo(x):
+    dur = np.random.randint(1, 10)
+    print(f"{x} sleeping for ", dur)
+    time.sleep(dur)
+    return x * 2
+
+with concurrent.futures.ProcessPoolExecutor() as executor:
+    for result in executor.map(foo, range(10), chunksize=3):
+        print("result", result)
+    # futures = [executor.submit(foo, x) for x in range(10)]
+    # for future in concurrent.futures.as_completed(futures):
+    #     print(future.result())
+
+# %%
+###########################################################
+###      writing out random labels ########################
+###########################################################
+###########################################################
 categories = [d.name for d in sorted(ktrain.iterdir())]
 print(len(categories))
 rng = np.random.default_rng(0)
@@ -277,7 +373,6 @@ videos = rng.choice(videos, 1000)
 
 num_shards = int(math.sqrt(len(videos)))
 print(f"{num_shards=}")
-
 # %%
 basedir = "/media/mark/sol/ktfr/"
 basename = "kinetics_dummy"
@@ -300,9 +395,12 @@ with gff._close_on_exit(writers) as writers:
             #print("too short", vid)
             continue
         # print("length", end)
-        seq_ex = generate_sequence_example(
-            vid, start=0, end=end, fps=25, min_resize=256, sampling_rate=16_000
-        )
+        seq_ex = generate_sequence_example(vid,
+                                           start=0,
+                                           end=end,
+                                           fps=25,
+                                           min_resize=256,
+                                           sampling_rate=16_000)
         if seq_ex is None:
             #print("no audio", vid)
             continue
@@ -336,7 +434,6 @@ record_fp = str(record_fp)
 
 # %%
 
-
 # %%
 vid = str(vids[5])
 print(vid)
@@ -349,11 +446,8 @@ seq_ex = generate_sequence_example(vid, start=0, end=end)
 # https://www.tensorflow.org/api_docs/python/tf/train/FloatList
 # https://www.tensorflow.org/api_docs/python/tf/io/parse_sequence_example
 # https://trac.ffmpeg.org/wiki/audio%20types
-data = (
-    seq_ex.feature_lists.feature_list["WAVEFORM/feature/floats"]
-    .feature[0]
-    .float_list.value
-)
+data = (seq_ex.feature_lists.feature_list["WAVEFORM/feature/floats"].
+        feature[0].float_list.value)
 print(len(data))
 
 rec = tf.io.parse_sequence_example(
@@ -395,7 +489,8 @@ audio = np.frombuffer(audio, np.int16)
 print("audio shape as int16", audio.shape)
 plt.plot(audio)
 # normalize to [-1, 1]
-audio_f32 = audio.astype(np.float32) / 32768.0  # https://stackoverflow.com/a/42544738
+audio_f32 = audio.astype(
+    np.float32) / 32768.0  # https://stackoverflow.com/a/42544738
 # expand to length, num_channels
 # reencoded = tf.audio.encode_wav(np.expand_dims(audio_f32, -1), sampling_rate)
 # tf.io.write_file("/home/mark/apple/tmp/test.wav", reencoded)
@@ -439,7 +534,6 @@ print(images.shape)
 plt.imshow(images[0])
 
 # %%
-
 
 specs = to_spec(audio_f32)
 print(specs.shape)
