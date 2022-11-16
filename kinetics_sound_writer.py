@@ -1,4 +1,5 @@
 import os
+
 # hide gpu from TF so we can parallelize spectrogram generation
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
@@ -24,13 +25,13 @@ import ffmpeg
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import fire
+
 # import tensorflow.experimental.numpy as tnp
 import tqdm
 
 _JPEG_HEADER = b"\xff\xd8"
 
-src = str(Path.home() / "apple/mmaz_dmr/")
-sys.path.append(src)
 import examples.generate_from_file as gff
 
 
@@ -54,17 +55,17 @@ def to_spec(
     frame_step is 10ms, so 160 samples
     """
     if spectrogram_type not in ["spectrogram", "logmf", "mfcc"]:
-        raise ValueError("Spectrogram type should be one of `spectrogram`, "
-                         "`logmf`, or `mfcc`, got {}".format(spectrogram_type))
+        raise ValueError(
+            "Spectrogram type should be one of `spectrogram`, "
+            "`logmf`, or `mfcc`, got {}".format(spectrogram_type)
+        )
     if normalize:
-        raw_audio /= tf.reduce_max(tf.abs(raw_audio), axis=-1,
-                                   keepdims=True) + 1e-8
+        raw_audio /= tf.reduce_max(tf.abs(raw_audio), axis=-1, keepdims=True) + 1e-8
         # features[audio_feature_name] = raw_audio
     #   if preemphasis is not None:
     #     raw_audio = _preemphasis(raw_audio, preemphasis)
 
-    def _extract_spectrogram(waveform: tf.Tensor,
-                             spectrogram_type: str) -> tf.Tensor:
+    def _extract_spectrogram(waveform: tf.Tensor, spectrogram_type: str) -> tf.Tensor:
         # NOTE(mmaz): modified to use a hamming_window instead of tf.signal.hann
         stfts = tf.signal.stft(
             waveform,
@@ -88,10 +89,10 @@ def to_spec(
             lower_edge_hertz,
             upper_edge_hertz,
         )
-        mel_spectrograms = tf.tensordot(spectrograms,
-                                        linear_to_mel_weight_matrix, 1)
-        mel_spectrograms.set_shape(spectrograms.shape[:-1].concatenate(
-            linear_to_mel_weight_matrix.shape[-1:]))
+        mel_spectrograms = tf.tensordot(spectrograms, linear_to_mel_weight_matrix, 1)
+        mel_spectrograms.set_shape(
+            spectrograms.shape[:-1].concatenate(linear_to_mel_weight_matrix.shape[-1:])
+        )
 
         # Compute a stabilized log to get log-magnitude mel-scale spectrograms.
         log_mel_spectrograms = tf.math.log(mel_spectrograms + 1e-6)
@@ -102,22 +103,20 @@ def to_spec(
 
 
 def generate_sequence_example(
-        video_path: str,
-        label_id: int,
-        label_name: str,
-        start: float,
-        end: float,
-        fps: int,
-        min_resize: int,
-        sampling_rate: int,
-        spec_width_timeaxis: int = 100,  # 100x128
+    video_path: str,
+    label_id: int,
+    label_name: str,
+    start: float,
+    end: float,
+    fps: int,
+    min_resize: int,
+    sampling_rate: int,
+    spec_width_timeaxis: int = 100,  # 100x128
 ) -> Optional[tf.train.SequenceExample]:
     """Generate a sequence example."""
-    imgs_encoded = gff.extract_frames(video_path,
-                                      start,
-                                      end,
-                                      fps=fps,
-                                      min_resize=min_resize)
+    imgs_encoded = gff.extract_frames(
+        video_path, start, end, fps=fps, min_resize=min_resize
+    )
 
     # Initiate the sequence example.
     seq_example = tf.train.SequenceExample()
@@ -127,19 +126,18 @@ def generate_sequence_example(
         gff.add_bytes_list("image/encoded", [img_encoded], seq_example)
 
     # Add audio.
-    audio = gff.extract_audio(video_path,
-                              start,
-                              end,
-                              sampling_rate=sampling_rate)
+    audio = gff.extract_audio(video_path, start, end, sampling_rate=sampling_rate)
 
     spec = to_spec(audio, spectrogram_type="logmf", sample_rate=sampling_rate)
     nearest_divisible = spec.shape[0] - (spec.shape[0] % spec_width_timeaxis)
     spec_divisible = spec[:nearest_divisible, :]
 
-    for spec_second in np.vsplit(spec_divisible.numpy(),
-                                 nearest_divisible // spec_width_timeaxis):
-        gff.add_float_list("melspec/feature/floats",
-                           np.reshape(spec_second, -1), seq_example)
+    for spec_second in np.vsplit(
+        spec_divisible.numpy(), nearest_divisible // spec_width_timeaxis
+    ):
+        gff.add_float_list(
+            "melspec/feature/floats", np.reshape(spec_second, -1), seq_example
+        )
 
     # to include raw waveforms:
     # gff.add_float_list("WAVEFORM/feature/floats", audio, seq_example)
@@ -147,8 +145,7 @@ def generate_sequence_example(
     # Add other metadata.
     gff.set_context_bytes("video/filename", video_path.encode(), seq_example)
     # Add start and time in micro seconds.
-    gff.set_context_int("clip/start/timestamp", int(1_000_000 * start),
-                        seq_example)
+    gff.set_context_int("clip/start/timestamp", int(1_000_000 * start), seq_example)
     gff.set_context_int("clip/end/timestamp", int(1_000_000 * end), seq_example)
 
     # see dmvr/modalities.py::add_label()
@@ -177,38 +174,103 @@ class VidToEncode:
 
 
 def create_sequence(target: VidToEncode):
-    seq_ex = generate_sequence_example(target.video_path,
-                                       start=0,
-                                       end=target.duration,
-                                       label_id=target.label_id,
-                                       label_name=target.category,
-                                       fps=25,
-                                       min_resize=256,
-                                       sampling_rate=16_000)
+    seq_ex = generate_sequence_example(
+        target.video_path,
+        start=0,
+        end=target.duration,
+        label_id=target.label_id,
+        label_name=target.category,
+        fps=25,
+        min_resize=256,
+        sampling_rate=16_000,
+    )
     return seq_ex, target
 
 
-def write_split():
-    # load kinetics subset with audio (all videos > 8s in duration)
-    kinetics_subset_waudio = json.loads(
-        Path("kinetics_subset_waudio_duration_over8sec.json").read_text())
+def make_tiny_ds(
+    dataset: dict, duplicate_train_and_val=True, videos_per_category=10, seed=0
+):
+    rng = np.random.default_rng(seed)
+    tiny = {}
+    if duplicate_train_and_val:
+        splits = ["train"]
+    else:
+        splits = ["train", "val"]
+    for split in splits:
+        s = {}
+        for category, videos in dataset[split].items():
+            video_subset = rng.choice(videos, videos_per_category, replace=False)
+            s[category] = video_subset.tolist()
+        tiny[split] = s
+    if duplicate_train_and_val:
+        tiny["val"] = tiny["train"]
+    return tiny
 
-    split = "train"
+
+def test():
+    kinetics_subset_waudio = json.loads(
+        Path("kinetics_subset_waudio_duration_over8sec.json").read_text()
+    )
+    kinetics_subset_waudio = make_tiny_ds(kinetics_subset_waudio)
+    print(kinetics_subset_waudio["train"]["blowing leaves"])
+    print("---------------------")
+    print(kinetics_subset_waudio["val"]["blowing leaves"])
+
+
+def load_samples(
+    make_tiny: bool,
+    kinetics_json: str = "kinetics_subset_waudio_duration_over8sec.json",
+    src_basedir: Optional[str] = None,
+    dest_basedir: str = "/media/mark/sol/kinetics_sound/",
+):
+    # load kinetics subset with audio (all videos > 8s in duration)
+    kinetics_subset_waudio = json.loads(Path(kinetics_json).read_text())
+    if make_tiny:
+        kinetics_subset_waudio = make_tiny_ds(kinetics_subset_waudio)
+
+    dest_basedir = Path(dest_basedir)
+    for split in ["train", "val"]:
+        split_dir = str(dest_basedir / split)
+        assert Path(split_dir).exists(), f"{split_dir} does not exist"
+        assert len(list(Path(split_dir).iterdir())) == 0, f"{split_dir} not empty"
+    for split in ["train", "val"]:
+        split_dir = str(dest_basedir / split)
+        write_split(
+            kinetics_subset_waudio,
+            split,
+            split_dir=split_dir,
+            replace_video_basedir=src_basedir,
+        )
+
+
+def maybe_replace_basepath(
+    video_path: str, replace_video_basedir: Optional[str], split: str
+):
+    if replace_video_basedir is None:
+        return video_path
+    video_path = Path(video_path)
+    replace_video_basedir = Path(replace_video_basedir)
+    video_name = video_path.name
+    category = video_path.parts[-2]
+    new_path = replace_video_basedir / split / category / video_name
+    return str(new_path)
+
+
+def write_split(
+    kinetics_subset_waudio: dict,
+    split: str,
+    split_dir: Path,
+    replace_video_basedir: Optional[str] = None,
+):
+    assert split in ["train", "val"]
     print(f"{split=}")
-    basedir = Path("/media/mark/sol/kinetics_sound/")
-    split_dir = str(basedir / split)
-    assert Path(split_dir).exists(), f"{split_dir} does not exist"
-    assert len(list(Path(split_dir).iterdir())) == 0, f"{split_dir} not empty"
     basename = "kinetics_sound"
 
     categories = list(sorted(kinetics_subset_waudio[split].keys()))
     category2labelid = {c: ix for ix, c in enumerate(categories)}
     print("num categories", len(categories))
-    all_videos = [
-        v for c in categories for v in kinetics_subset_waudio[split][c]
-    ]
-    print("num vids", len(all_videos), "avg",
-          len(all_videos) // len(categories))
+    all_videos = [v for c in categories for v in kinetics_subset_waudio[split][c]]
+    print("num vids", len(all_videos), "avg", len(all_videos) // len(categories))
     num_shards = int(math.sqrt(len(all_videos)))
     print(f"{num_shards=}")
 
@@ -217,16 +279,23 @@ def write_split():
     encoding_targets = []
     idx = 0
     # categories are already sorted by lexical order in the json, but double checking
-    for category, videos in sorted(kinetics_subset_waudio[split].items(),
-                                   key=lambda x: x[0]):
+    for category, videos in sorted(
+        kinetics_subset_waudio[split].items(), key=lambda x: x[0]
+    ):
         for video in sorted(videos, key=lambda x: x["path"]):
-            video_path = video["path"]
+            video_path = maybe_replace_basepath(
+                video_path=video["path"],
+                replace_video_basedir=replace_video_basedir,
+                split=split,
+            )
             duration = video["duration"]
-            target = VidToEncode(ix=idx,
-                                 video_path=video_path,
-                                 duration=duration,
-                                 category=category,
-                                 label_id=category2labelid[category])
+            target = VidToEncode(
+                ix=idx,
+                video_path=video_path,
+                duration=duration,
+                category=category,
+                label_id=category2labelid[category],
+            )
             encoding_targets.append(target)
             idx += 1
     print("num vids to encode", len(encoding_targets))
@@ -251,9 +320,9 @@ def write_split():
     start_time = datetime.datetime.now()
     with gff._close_on_exit(writers) as writers:
         with multiprocessing.Pool() as pool:
-            for seq_ex, target in pool.imap_unordered(create_sequence,
-                                                      shuffled_targets,
-                                                      chunksize=50):
+            for seq_ex, target in pool.imap_unordered(
+                create_sequence, shuffled_targets, chunksize=50
+            ):
                 writer = writers[target.ix % num_shards]
                 writer.write(seq_ex.SerializeToString())
                 written += 1
@@ -267,4 +336,4 @@ def write_split():
 
 
 if __name__ == "__main__":
-    write_split()
+    fire.Fire(load_samples)
