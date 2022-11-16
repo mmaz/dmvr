@@ -188,22 +188,17 @@ def create_sequence(target: VidToEncode):
 
 
 def make_tiny_ds(
-    dataset: dict, duplicate_train_and_val=True, videos_per_category=10, seed=0
+    dataset: dict, videos_per_category=10, seed=0
 ):
     rng = np.random.default_rng(seed)
     tiny = {}
-    if duplicate_train_and_val:
-        splits = ["train"]
-    else:
-        splits = ["train", "val"]
-    for split in splits:
-        s = {}
-        for category, videos in dataset[split].items():
-            video_subset = rng.choice(videos, videos_per_category, replace=False)
-            s[category] = video_subset.tolist()
-        tiny[split] = s
-    if duplicate_train_and_val:
-        tiny["val"] = tiny["train"]
+    # this only has one split, 'train'
+    split = "train"
+    s = {}
+    for category, videos in dataset[split].items():
+        video_subset = rng.choice(videos, videos_per_category, replace=False)
+        s[category] = video_subset.tolist()
+    tiny[split] = s
     return tiny
 
 
@@ -228,13 +223,17 @@ def load_samples(
     kinetics_subset_waudio = json.loads(Path(kinetics_json).read_text())
     if mode == "tiny":
         kinetics_subset_waudio = make_tiny_ds(kinetics_subset_waudio)
+        splits = ["train"]
+    else:
+        splits = ["train", "val"]
 
     dest_basedir = Path(dest_basedir)
-    for split in ["train", "val"]:
+
+    for split in splits:
         split_dir = str(dest_basedir / split)
         assert Path(split_dir).exists(), f"{split_dir} does not exist"
         assert len(list(Path(split_dir).iterdir())) == 0, f"{split_dir} not empty"
-    for split in ["train", "val"]:
+    for split in splits:
         split_dir = str(dest_basedir / split)
         write_split(
             kinetics_subset_waudio,
