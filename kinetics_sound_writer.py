@@ -334,6 +334,7 @@ def write_split(
                     )
     print(f"total {written=}")
 
-
+# mkdir -p /mnt/data/mini/train
+# python kinetics_sound_writer.py --mode tiny --kinetics_json /mnt/data/kinetics-sound-source/kinetics_subset_waudio_duration_over8sec.json --src_basedir /mnt/data/kinetics-sound-source --dest_basedir /mnt/data/mini
 if __name__ == "__main__":
     fire.Fire(load_samples)
