@@ -218,14 +218,15 @@ def test():
 
 
 def load_samples(
-    make_tiny: bool,
+    mode: str,
     kinetics_json: str = "kinetics_subset_waudio_duration_over8sec.json",
     src_basedir: Optional[str] = None,
     dest_basedir: str = "/media/mark/sol/kinetics_sound/",
 ):
+    assert mode in ["tiny", "full"], f"{mode=} not tiny/full"
     # load kinetics subset with audio (all videos > 8s in duration)
     kinetics_subset_waudio = json.loads(Path(kinetics_json).read_text())
-    if make_tiny:
+    if mode == "tiny":
         kinetics_subset_waudio = make_tiny_ds(kinetics_subset_waudio)
 
     dest_basedir = Path(dest_basedir)

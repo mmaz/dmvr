@@ -21,11 +21,12 @@ To run the code, you will need to install the following dependencies:
 
 Please make sure the ffmpeg binaries (downloadable
 [here](https://johnvansickle.com/ffmpeg/)) are visible from the *PATH*
-environment variable and to install its python-ffmpeg python wrapper (and not
-ffmpeg-python which is different). Installing python-ffmpeg with pip can be done
+environment variable and to install its [kkroening/ffmpeg-python](https://github.com/kkroening/ffmpeg-python) python wrapper (and not
+[jonghwanhyeon/python-ffmpeg](https://pypi.org/project/python-ffmpeg/) which is different). Installing ffmpeg-python with pip can be done
 in one line with:
 
 ```sh
+# this installs https://github.com/kkroening/ffmpeg-python
 pip install ffmpeg-python
 ```
 
