@@ -187,9 +187,7 @@ def create_sequence(target: VidToEncode):
     return seq_ex, target
 
 
-def make_tiny_ds(
-    dataset: dict, videos_per_category=10, seed=0
-):
+def make_tiny_ds(dataset: dict, videos_per_category=10, seed=0):
     rng = np.random.default_rng(seed)
     tiny = {}
     # this only has one split, 'train'
@@ -278,7 +276,7 @@ def write_split(
     # this enables indexing into the list of writers
     encoding_targets = []
     idx = 0
-    # categories are already sorted by lexical order in the json, but double checking
+    # categories are already sorted by lexical order in the json, but double checking here
     for category, videos in sorted(
         kinetics_subset_waudio[split].items(), key=lambda x: x[0]
     ):
@@ -305,7 +303,10 @@ def write_split(
     print("videos in GB", sum(video_filesizes) / (1024**3))
 
     rng = np.random.default_rng(0)
-    shuffled_targets = rng.permutation(encoding_targets)
+    if split == "train":
+        shuffled_targets = rng.permutation(encoding_targets)
+    else:
+        shuffled_targets = encoding_targets  # dont shuffle val
 
     print("writing shards")
     total_to_write = len(shuffled_targets)
@@ -334,7 +335,12 @@ def write_split(
                     )
     print(f"total {written=}")
 
+
+# mini dataset for overfitting:
 # mkdir -p /mnt/data/mini/train
 # python kinetics_sound_writer.py --mode tiny --kinetics_json /mnt/data/kinetics-sound-source/kinetics_subset_waudio_duration_over8sec.json --src_basedir /mnt/data/kinetics-sound-source --dest_basedir /mnt/data/mini
+# full kinetics-sound dataset:
+# mkdir -p /mnt/data/ks30/train && mkdir -p /mnt/data/ks30/val
+# python kinetics_sound_writer.py --mode full --kinetics_json /mnt/data/kinetics-sound-source/kinetics_subset_waudio_duration_over8sec.json --src_basedir /mnt/data/kinetics-sound-source --dest_basedir /mnt/data/ks30
 if __name__ == "__main__":
     fire.Fire(load_samples)
