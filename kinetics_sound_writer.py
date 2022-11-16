@@ -353,5 +353,14 @@ def write_split(
 # full kinetics-sound dataset:
 # mkdir -p /mnt/data/ks30/train && mkdir -p /mnt/data/ks30/val
 # python kinetics_sound_writer.py --mode full --kinetics_json /mnt/data/kinetics-sound-source/kinetics_subset_waudio_duration_over8sec.json --src_basedir /mnt/data/kinetics-sound-source --dest_basedir /mnt/data/ks30
+
+# split='train'
+# num categories 30
+# num vids 22917 avg 763
+# num_shards=151
+# split='val'
+# num categories 30
+# num vids 1407 avg 46
+# num_shards=37
 if __name__ == "__main__":
     fire.Fire(load_samples)
