@@ -215,6 +215,7 @@ def load_samples(
     kinetics_json: str = "kinetics_subset_waudio_duration_over8sec.json",
     src_basedir: Optional[str] = None,
     dest_basedir: str = "/media/mark/sol/kinetics_sound/",
+    dry_run: bool = True,
 ):
     assert mode in ["tiny", "full"], f"{mode=} not tiny/full"
     # load kinetics subset with audio (all videos > 8s in duration)
@@ -227,10 +228,11 @@ def load_samples(
 
     dest_basedir = Path(dest_basedir)
 
-    for split in splits:
-        split_dir = str(dest_basedir / split)
-        assert Path(split_dir).exists(), f"{split_dir} does not exist"
-        assert len(list(Path(split_dir).iterdir())) == 0, f"{split_dir} not empty"
+    if not dry_run:
+        for split in splits:
+            split_dir = str(dest_basedir / split)
+            assert Path(split_dir).exists(), f"{split_dir} does not exist"
+            assert len(list(Path(split_dir).iterdir())) == 0, f"{split_dir} not empty"
     for split in splits:
         split_dir = str(dest_basedir / split)
         write_split(
@@ -238,6 +240,7 @@ def load_samples(
             split,
             split_dir=split_dir,
             replace_video_basedir=src_basedir,
+            dry_run=dry_run,
         )
 
 
@@ -258,6 +261,7 @@ def write_split(
     kinetics_subset_waudio: dict,
     split: str,
     split_dir: Path,
+    dry_run: bool,
     replace_video_basedir: Optional[str] = None,
 ):
     assert split in ["train", "val"]
@@ -271,6 +275,8 @@ def write_split(
     print("num vids", len(all_videos), "avg", len(all_videos) // len(categories))
     num_shards = int(math.sqrt(len(all_videos)))
     print(f"{num_shards=}")
+    if dry_run:
+        return
 
     # add enumeration to kinetics_subset_waudio
     # this enables indexing into the list of writers
