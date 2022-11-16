@@ -330,8 +330,13 @@ def write_split(
                 if target.ix % 250 == 0:
                     current = datetime.datetime.now()
                     pct_written = written / total_to_write
+                    elapsed = current - start_time
+                    est_seconds_to_completion = elapsed.total_seconds() / pct_written
+                    est_time_remaining = datetime.timedelta(
+                        seconds=est_seconds_to_completion - elapsed.total_seconds()
+                    )
                     print(
-                        f"{target.ix=}, {written=}, {pct_written:0.2f}, timedelta={current - start_time}"
+                        f"{target.ix=}, {written=}, {pct_written:0.2f}, {elapsed=}, {est_time_remaining=}"
                     )
     print(f"total {written=}")
 
