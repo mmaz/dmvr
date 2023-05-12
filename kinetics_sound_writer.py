@@ -3,6 +3,9 @@ import os
 # hide gpu from TF so we can parallelize spectrogram generation
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
+import tensorflow as tf
+tf.config.experimental.set_visible_devices([], "GPU")
+
 from dataclasses import dataclass
 import datetime
 import logging
@@ -24,7 +27,6 @@ from absl import flags
 import ffmpeg
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 import fire
 
 # import tensorflow.experimental.numpy as tnp
@@ -213,8 +215,9 @@ def test():
 def load_samples(
     mode: str,
     kinetics_json: str = "kinetics_subset_waudio_duration_over8sec.json",
+    # kinetics_json: str = "/mnt/mmm/kinetics-sound-source/ks30_filtered_train.json",
     src_basedir: Optional[str] = None,
-    dest_basedir: str = "/media/mark/sol/kinetics_sound/",
+    dest_basedir: str = "/home/mark/ks30/",
     dry_run: bool = True,
 ):
     assert mode in ["tiny", "full"], f"{mode=} not tiny/full"
